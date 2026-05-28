@@ -21,7 +21,7 @@ const NAV_LINKS = [
   { label: 'Nosotros', href: '#nosotros' },
 ];
 
-export default function Navbar({ cartCount = 0 }) {
+export default function Navbar({ cartCount = 0, onCartClick }) {
   const [isScrolled, setIsScrolled] = useState(false);
   const [isMobileOpen, setIsMobileOpen] = useState(false);
   const [prevCartCount, setPrevCartCount] = useState(cartCount);
@@ -178,6 +178,7 @@ export default function Navbar({ cartCount = 0 }) {
 
             {/* Carrito con badge */}
             <button
+              onClick={onCartClick}
               aria-label={`Carrito: ${cartCount} ${cartCount === 1 ? 'producto' : 'productos'}`}
               className={`relative p-2 rounded-full transition-all duration-300
                           hover:bg-sage-50 focus:outline-none

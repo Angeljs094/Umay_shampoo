@@ -1,14 +1,8 @@
 /**
  * @fileoverview Hook personalizado: useShampooQuiz
  *
- * Implementa una Máquina de Estados Finitos (FSM) para controlar el flujo del
- * cuestionario de personalización UMAY. Gestiona transiciones de estado,
- * respuestas del usuario, animación de carga y resultado final.
- *
- * Diagrama de estados:
- *   WELCOME → STEP_HAIR_TYPE → STEP_GOAL → STEP_SCENT → LOADING_AI → RESULT
- *                                                                        ↓
- *                                                                 (restart) → WELCOME
+ * FSM del quiz + gestión completa del carrito de compras.
+ * El carrito almacena items con su fórmula completa, cantidad y precio.
  *
  * @module hooks/useShampooQuiz
  */
@@ -17,276 +11,226 @@ import { useReducer, useCallback, useEffect } from 'react';
 import { QUIZ_STATES, QUIZ_QUESTIONS } from '@/types/quiz.js';
 import { computeFormula, serializeFormula, deserializeFormula } from '@/utils/recommendationEngine.js';
 
-// ─── CLAVE DE PERSISTENCIA EN LOCALSTORAGE ────────────────────────────────────
-const STORAGE_KEY = 'umay_formula_result';
-const ANSWERS_KEY = 'umay_quiz_answers';
+const STORAGE_KEY   = 'umay_formula_result';
+const ANSWERS_KEY   = 'umay_quiz_answers';
+const CART_KEY      = 'umay_cart_items';
 
-// ─── ESTADO INICIAL ──────────────────────────────────────────────────────────
+// ─── ESTADO INICIAL ───────────────────────────────────────────────────────────
 
 /**
- * @typedef {Object} QuizState
- * @property {string}      currentState - Estado FSM actual (uno de QUIZ_STATES)
- * @property {Object}      answers      - Respuestas acumuladas { stateKey: optionId }
- * @property {Object|null} result       - Resultado del motor de recomendación
- * @property {number}      cartCount    - Cantidad de items en el carrito
- * @property {boolean}     isAnimating  - Flag para evitar doble transición
+ * @typedef {Object} CartItem
+ * @property {string}   cartId       - ID único del item en el carrito (timestamp)
+ * @property {string}   formulaName  - Nombre de la fórmula
+ * @property {string}   tagline      - Tagline de la fórmula
+ * @property {string}   colorHex     - Color de la barra de shampoo
+ * @property {number}   price        - Precio unitario
+ * @property {string}   priceLabel   - Precio formateado
+ * @property {string}   tier         - Tier: base | premium | deluxe
+ * @property {Array}    topIngredients - Los 3 ingredientes top
+ * @property {Object}   answers      - Respuestas del quiz
+ * @property {number}   quantity     - Cantidad de unidades
  */
 
-/** @type {QuizState} */
+/** @type {{ currentState: string, answers: Object, result: Object|null, cartItems: CartItem[], isAnimating: boolean }} */
 const INITIAL_STATE = {
   currentState: QUIZ_STATES.WELCOME,
-  answers: {},
-  result: null,
-  cartCount: 0,
-  isAnimating: false,
+  answers:      {},
+  result:       null,
+  cartItems:    [],
+  isAnimating:  false,
 };
 
-// ─── TIPOS DE ACCIONES ────────────────────────────────────────────────────────
+// ─── ACCIONES ─────────────────────────────────────────────────────────────────
 
-const ACTION_TYPES = {
-  START_QUIZ: 'START_QUIZ',
-  SELECT_ANSWER: 'SELECT_ANSWER',
-  TRIGGER_LOADING: 'TRIGGER_LOADING',
-  SET_RESULT: 'SET_RESULT',
-  ADD_TO_CART: 'ADD_TO_CART',
-  RESTART_QUIZ: 'RESTART_QUIZ',
-  RESTORE_STATE: 'RESTORE_STATE',
-  SET_ANIMATING: 'SET_ANIMATING',
+const A = {
+  START_QUIZ:        'START_QUIZ',
+  SELECT_ANSWER:     'SELECT_ANSWER',
+  SET_RESULT:        'SET_RESULT',
+  ADD_TO_CART:       'ADD_TO_CART',
+  REMOVE_FROM_CART:  'REMOVE_FROM_CART',
+  UPDATE_QTY:        'UPDATE_QTY',
+  CLEAR_CART:        'CLEAR_CART',
+  RESTART_QUIZ:      'RESTART_QUIZ',
+  SET_ANIMATING:     'SET_ANIMATING',
 };
 
 // ─── TABLA DE TRANSICIONES FSM ────────────────────────────────────────────────
 
-/**
- * Mapa de transiciones válidas de la máquina de estados.
- * Garantiza que no haya saltos ilegales entre estados.
- *
- * @type {Object.<string, string>}
- */
 const STATE_TRANSITIONS = {
-  [QUIZ_STATES.WELCOME]: QUIZ_STATES.STEP_HAIR_TYPE,
+  [QUIZ_STATES.WELCOME]:        QUIZ_STATES.STEP_HAIR_TYPE,
   [QUIZ_STATES.STEP_HAIR_TYPE]: QUIZ_STATES.STEP_GOAL,
-  [QUIZ_STATES.STEP_GOAL]: QUIZ_STATES.STEP_SCENT,
-  [QUIZ_STATES.STEP_SCENT]: QUIZ_STATES.LOADING_AI,
-  [QUIZ_STATES.LOADING_AI]: QUIZ_STATES.RESULT,
-  [QUIZ_STATES.RESULT]: QUIZ_STATES.WELCOME, // Reinicio del ciclo
+  [QUIZ_STATES.STEP_GOAL]:      QUIZ_STATES.STEP_SCENT,
+  [QUIZ_STATES.STEP_SCENT]:     QUIZ_STATES.LOADING_AI,
+  [QUIZ_STATES.LOADING_AI]:     QUIZ_STATES.RESULT,
+  [QUIZ_STATES.RESULT]:         QUIZ_STATES.WELCOME,
 };
 
-// ─── REDUCER PURO ─────────────────────────────────────────────────────────────
+// ─── REDUCER ──────────────────────────────────────────────────────────────────
 
-/**
- * Reducer de la FSM del quiz. Maneja todas las transiciones de estado de forma pura.
- *
- * @param {QuizState} state  - Estado actual
- * @param {{ type: string, payload?: any }} action - Acción despachada
- * @returns {QuizState} Nuevo estado
- */
 function quizReducer(state, action) {
   switch (action.type) {
-    case ACTION_TYPES.START_QUIZ:
-      return {
-        ...state,
-        currentState: QUIZ_STATES.STEP_HAIR_TYPE,
-        answers: {},
-        result: null,
-        isAnimating: false,
-      };
 
-    case ACTION_TYPES.SELECT_ANSWER: {
+    case A.START_QUIZ:
+      return { ...state, currentState: QUIZ_STATES.STEP_HAIR_TYPE, answers: {}, result: null, isAnimating: false };
+
+    case A.SELECT_ANSWER: {
       const { questionState, optionId } = action.payload;
       const nextState = STATE_TRANSITIONS[questionState];
-
-      if (!nextState) {
-        console.warn('[QuizFSM] Transición inválida desde:', questionState);
-        return state;
-      }
-
-      const updatedAnswers = { ...state.answers, [questionState]: optionId };
-
+      if (!nextState) { console.warn('[QuizFSM] Transición inválida:', questionState); return state; }
       return {
         ...state,
-        answers: updatedAnswers,
+        answers:      { ...state.answers, [questionState]: optionId },
         currentState: nextState,
-        isAnimating: true,
+        isAnimating:  true,
       };
     }
 
-    case ACTION_TYPES.SET_RESULT:
-      return {
-        ...state,
-        currentState: QUIZ_STATES.RESULT,
-        result: action.payload,
-        isAnimating: false,
-      };
+    case A.SET_RESULT:
+      return { ...state, currentState: QUIZ_STATES.RESULT, result: action.payload, isAnimating: false };
 
-    case ACTION_TYPES.ADD_TO_CART:
-      return {
-        ...state,
-        cartCount: state.cartCount + 1,
+    case A.ADD_TO_CART: {
+      const formula = action.payload;
+      // Si ya existe exactamente esa fórmula (mismo formulaName), incrementar qty
+      const existingIdx = state.cartItems.findIndex(i => i.formulaName === formula.formulaName);
+      if (existingIdx >= 0) {
+        const updated = [...state.cartItems];
+        updated[existingIdx] = { ...updated[existingIdx], quantity: updated[existingIdx].quantity + 1 };
+        return { ...state, cartItems: updated };
+      }
+      const newItem = {
+        cartId:        `umay-${Date.now()}`,
+        formulaName:   formula.formulaName,
+        tagline:       formula.tagline,
+        colorHex:      formula.colorHex,
+        price:         formula.price,
+        priceLabel:    formula.priceLabel,
+        tier:          formula.tier,
+        topIngredients: formula.topIngredients,
+        answers:       formula.answers,
+        quantity:      1,
       };
+      return { ...state, cartItems: [...state.cartItems, newItem] };
+    }
 
-    case ACTION_TYPES.RESTART_QUIZ:
-      return {
-        ...INITIAL_STATE,
-        cartCount: state.cartCount, // Preservar el carrito al reiniciar
-      };
+    case A.REMOVE_FROM_CART:
+      return { ...state, cartItems: state.cartItems.filter(i => i.cartId !== action.payload) };
 
-    case ACTION_TYPES.RESTORE_STATE:
-      return {
-        ...state,
-        ...action.payload,
-      };
+    case A.UPDATE_QTY: {
+      const { cartId, delta } = action.payload;
+      const updated = state.cartItems
+        .map(i => i.cartId === cartId ? { ...i, quantity: Math.max(1, i.quantity + delta) } : i);
+      return { ...state, cartItems: updated };
+    }
 
-    case ACTION_TYPES.SET_ANIMATING:
+    case A.CLEAR_CART:
+      return { ...state, cartItems: [] };
+
+    case A.RESTART_QUIZ:
+      return { ...INITIAL_STATE, cartItems: state.cartItems }; // preservar carrito
+
+    case A.SET_ANIMATING:
       return { ...state, isAnimating: action.payload };
 
     default:
-      console.warn('[QuizFSM] Acción no reconocida:', action.type);
       return state;
   }
 }
 
 // ─── HOOK PRINCIPAL ───────────────────────────────────────────────────────────
 
-/**
- * Hook que expone la máquina de estados del quiz y sus acciones.
- *
- * @returns {{
- *   currentState: string,
- *   answers: Object,
- *   result: Object|null,
- *   cartCount: number,
- *   isAnimating: boolean,
- *   currentQuestion: Object|null,
- *   totalSteps: number,
- *   currentStep: number,
- *   startQuiz: () => void,
- *   selectAnswer: (questionState: string, optionId: string) => void,
- *   addToCart: () => void,
- *   restartQuiz: () => void,
- * }}
- */
 export function useShampooQuiz() {
   const [state, dispatch] = useReducer(quizReducer, INITIAL_STATE, initializeState);
 
-  // ── Inicializar animating=false después de cada transición de estado ─────
+  // Reset animating flag
   useEffect(() => {
-    if (state.isAnimating) {
-      const timer = setTimeout(() => {
-        dispatch({ type: ACTION_TYPES.SET_ANIMATING, payload: false });
-      }, 50);
-      return () => clearTimeout(timer);
-    }
+    if (!state.isAnimating) return;
+    const t = setTimeout(() => dispatch({ type: A.SET_ANIMATING, payload: false }), 50);
+    return () => clearTimeout(t);
   }, [state.isAnimating]);
 
-  // ── Lanzar el motor de recomendación cuando llegamos a LOADING_AI ────────
+  // Motor de recomendación al llegar a LOADING_AI
   useEffect(() => {
     if (state.currentState !== QUIZ_STATES.LOADING_AI) return;
-
-    // Simulamos 2.5s de "procesamiento de IA botánica" antes de mostrar resultado
-    const timer = setTimeout(() => {
+    const t = setTimeout(() => {
       const formulaResult = computeFormula(state.answers, QUIZ_QUESTIONS);
-
-      // Persistir resultado y respuestas en localStorage
-      const serialized = serializeFormula(formulaResult);
-      if (serialized) {
-        try {
-          localStorage.setItem(STORAGE_KEY, serialized);
-          localStorage.setItem(ANSWERS_KEY, JSON.stringify(state.answers));
-        } catch (storageError) {
-          // localStorage puede fallar en modo privado: manejamos silenciosamente
-          console.warn('[QuizFSM] No se pudo guardar en localStorage:', storageError.message);
-        }
-      }
-
-      dispatch({ type: ACTION_TYPES.SET_RESULT, payload: formulaResult });
+      try {
+        localStorage.setItem(STORAGE_KEY, serializeFormula(formulaResult) ?? '');
+        localStorage.setItem(ANSWERS_KEY, JSON.stringify(state.answers));
+      } catch { /* silencioso */ }
+      dispatch({ type: A.SET_RESULT, payload: formulaResult });
     }, 2500);
-
-    return () => clearTimeout(timer);
+    return () => clearTimeout(t);
   }, [state.currentState, state.answers]);
+
+  // Persistir carrito en localStorage cuando cambia
+  useEffect(() => {
+    try {
+      localStorage.setItem(CART_KEY, JSON.stringify(state.cartItems));
+    } catch { /* silencioso */ }
+  }, [state.cartItems]);
 
   // ── ACCIONES PÚBLICAS ──────────────────────────────────────────────────────
 
-  const startQuiz = useCallback(() => {
-    dispatch({ type: ACTION_TYPES.START_QUIZ });
+  const startQuiz      = useCallback(() => dispatch({ type: A.START_QUIZ }), []);
+  const restartQuiz    = useCallback(() => {
+    try { localStorage.removeItem(STORAGE_KEY); localStorage.removeItem(ANSWERS_KEY); } catch {}
+    dispatch({ type: A.RESTART_QUIZ });
   }, []);
+  const selectAnswer   = useCallback((questionState, optionId) =>
+    dispatch({ type: A.SELECT_ANSWER, payload: { questionState, optionId } }), []);
 
-  const selectAnswer = useCallback((questionState, optionId) => {
-    dispatch({
-      type: ACTION_TYPES.SELECT_ANSWER,
-      payload: { questionState, optionId },
-    });
-  }, []);
+  // addToCart recibe el objeto FormulaResult completo
+  const addToCart      = useCallback((formula) => dispatch({ type: A.ADD_TO_CART, payload: formula }), []);
+  const removeFromCart = useCallback((cartId)  => dispatch({ type: A.REMOVE_FROM_CART, payload: cartId }), []);
+  const updateQty      = useCallback((cartId, delta) => dispatch({ type: A.UPDATE_QTY, payload: { cartId, delta } }), []);
+  const clearCart      = useCallback(() => dispatch({ type: A.CLEAR_CART }), []);
 
-  const addToCart = useCallback(() => {
-    dispatch({ type: ACTION_TYPES.ADD_TO_CART });
-  }, []);
-
-  const restartQuiz = useCallback(() => {
-    try {
-      localStorage.removeItem(STORAGE_KEY);
-      localStorage.removeItem(ANSWERS_KEY);
-    } catch {
-      // Silencioso
-    }
-    dispatch({ type: ACTION_TYPES.RESTART_QUIZ });
-  }, []);
-
-  // ── DERIVACIONES COMPUTADAS ────────────────────────────────────────────────
-
-  const currentQuestion =
-    QUIZ_QUESTIONS.find((q) => q.state === state.currentState) || null;
-
-  const totalSteps = QUIZ_QUESTIONS.length;
-
-  const currentStep = currentQuestion?.step ?? 0;
+  // ── DERIVACIONES ──────────────────────────────────────────────────────────
+  const currentQuestion = QUIZ_QUESTIONS.find(q => q.state === state.currentState) || null;
+  const totalSteps      = QUIZ_QUESTIONS.length;
+  const currentStep     = currentQuestion?.step ?? 0;
+  const cartCount       = state.cartItems.reduce((s, i) => s + i.quantity, 0);
+  const cartTotal       = state.cartItems.reduce((s, i) => s + i.price * i.quantity, 0);
 
   return {
     currentState: state.currentState,
-    answers: state.answers,
-    result: state.result,
-    cartCount: state.cartCount,
-    isAnimating: state.isAnimating,
+    answers:      state.answers,
+    result:       state.result,
+    cartItems:    state.cartItems,
+    cartCount,
+    cartTotal,
+    isAnimating:  state.isAnimating,
     currentQuestion,
     totalSteps,
     currentStep,
     startQuiz,
+    restartQuiz,
     selectAnswer,
     addToCart,
-    restartQuiz,
+    removeFromCart,
+    updateQty,
+    clearCart,
   };
 }
 
-// ─── INICIALIZADOR DEL ESTADO ─────────────────────────────────────────────────
+// ─── INICIALIZADOR LAZY ───────────────────────────────────────────────────────
 
-/**
- * Inicializador lazy del reducer: restaura el estado desde localStorage si existe
- * un resultado previo guardado. Esto implementa la persistencia ligera requerida.
- *
- * @param {QuizState} initialArg - Estado inicial base
- * @returns {QuizState} Estado inicial (posiblemente restaurado)
- */
 function initializeState(initialArg) {
   try {
-    const savedResult = localStorage.getItem(STORAGE_KEY);
+    const savedResult  = localStorage.getItem(STORAGE_KEY);
     const savedAnswers = localStorage.getItem(ANSWERS_KEY);
+    const savedCart    = localStorage.getItem(CART_KEY);
+    const cartItems    = savedCart ? JSON.parse(savedCart) : [];
 
     if (savedResult && savedAnswers) {
-      const result = deserializeFormula(savedResult);
+      const result  = deserializeFormula(savedResult);
       const answers = JSON.parse(savedAnswers);
-
       if (result && answers) {
-        // Restauramos al estado RESULT con el resultado previo
-        return {
-          ...initialArg,
-          currentState: QUIZ_STATES.RESULT,
-          answers,
-          result,
-        };
+        return { ...initialArg, currentState: QUIZ_STATES.RESULT, answers, result, cartItems };
       }
     }
+    return { ...initialArg, cartItems };
   } catch {
-    // Si localStorage falla, iniciamos desde cero sin romper la app
+    return initialArg;
   }
-
-  return initialArg;
 }
