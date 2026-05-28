@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <!-- Fondo circular sage -->
+  <circle cx="32" cy="32" r="32" fill="#2C4A3E"/>
+  <!-- Hoja superior izquierda (dorada) -->
+  <path d="M18 14 C18 14, 40 13, 43 32 C43 32, 26 30, 18 14Z" fill="#C5A880" opacity="0.90"/>
+  <!-- Hoja inferior derecha (sage claro) -->
+  <path d="M46 50 C46 50, 24 51, 21 32 C21 32, 38 34, 46 50Z" fill="#4A7060" opacity="0.80"/>
+  <!-- Tallo central -->
+  <line x1="32" y1="12" x2="32" y2="52" stroke="#FAF8F5" stroke-width="2" stroke-linecap="round"/>
+  <!-- Puntos de energía botánica -->
+  <circle cx="32" cy="21" r="2.5" fill="#C5A880"/>
+  <circle cx="32" cy="43" r="2.5" fill="#C5A880"/>
+</svg>
