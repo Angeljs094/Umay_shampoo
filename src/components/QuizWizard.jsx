@@ -9,7 +9,7 @@
  * @module components/QuizWizard
  */
 
-import { useEffect, useRef, useState } from 'react';
+import { useRef } from 'react';
 import {
   Leaf, Sparkles, ShoppingBag, RotateCcw,
   CheckCircle2, ArrowRight,
@@ -468,23 +468,12 @@ export default function QuizWizard({ quiz }) {
     startQuiz, selectAnswer, addToCart, restartQuiz,
   } = quiz;
 
-  // Rastrear si el resultado actual ya está en el carrito
-  const [isAddedToCart, setIsAddedToCart] = useState(false);
-
-  // Reset flag cuando se reinicia
-  useEffect(() => {
-    if (currentState === QUIZ_STATES.WELCOME) setIsAddedToCart(false);
-  }, [currentState]);
-
-  // También resetear si limpian el carrito desde afuera
-  useEffect(() => {
-    if (cartItems.length === 0) setIsAddedToCart(false);
-  }, [cartItems]);
+  // Derivar si el resultado actual ya está en el carrito (más robusto que estado local)
+  const isAddedToCart = Boolean(result && cartItems.some(i => i.formulaName === result.formulaName));
 
   const handleAddToCart = () => {
     if (!result || isAddedToCart) return;
-    addToCart(result);       // pasa el objeto FormulaResult completo
-    setIsAddedToCart(true);
+    addToCart(result); // pasa el objeto FormulaResult completo
   };
 
   return (
